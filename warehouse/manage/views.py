@@ -131,6 +131,7 @@ class ManageAccountViews:
         self.breach_service = request.find_service(
             IPasswordBreachedService, context=None
         )
+        self.macaroon_service = request.find_service(IMacaroonService, context=None)
 
     @property
     def active_projects(self):
@@ -152,6 +153,7 @@ class ManageAccountViews:
                 user_service=self.user_service, breach_service=self.breach_service
             ),
             "active_projects": self.active_projects,
+            "describe_caveats": self.macaroon_service.describe_caveats,
         }
 
     @view_config(request_method="GET")
@@ -791,6 +793,7 @@ class ProvisionMacaroonViews:
                 user_service=self.user_service,
                 macaroon_service=self.macaroon_service,
             ),
+            "describe_caveats": self.macaroon_service.describe_caveats,
         }
 
     @view_config(request_method="GET")
@@ -814,12 +817,12 @@ class ProvisionMacaroonViews:
 
         response = {**self.default_response}
         if form.validate():
-            macaroon_caveats = {"permissions": form.validated_scope, "version": 1}
+            restrictions = form.validated_restrictions
             serialized_macaroon, macaroon = self.macaroon_service.create_macaroon(
-                location=self.request.domain,
+                domain=self.request.domain,
                 user_id=self.request.user.id,
                 description=form.description.data,
-                caveats=macaroon_caveats,
+                restrictions=restrictions,
             )
             self.user_service.record_event(
                 self.request.user.id,
@@ -827,14 +830,14 @@ class ProvisionMacaroonViews:
                 ip_address=self.request.remote_addr,
                 additional={
                     "description": form.description.data,
-                    "caveats": macaroon_caveats,
+                    "caveats": macaroon.caveats,
                 },
             )
-            if "projects" in form.validated_scope:
+            if "projects" in restrictions:
                 projects = [
                     project
                     for project in self.request.user.projects
-                    if project.normalized_name in form.validated_scope["projects"]
+                    if project.normalized_name in restrictions["projects"]
                 ]
                 for project in projects:
                     # NOTE: We don't disclose the full caveats for this token
@@ -877,12 +880,12 @@ class ProvisionMacaroonViews:
                 ip_address=self.request.remote_addr,
                 additional={"macaroon_id": form.macaroon_id.data},
             )
-            if "projects" in macaroon.caveats["permissions"]:
+            restrictions = self.macaroon_service.describe_caveats(macaroon.caveats)
+            if "projects" in restrictions:
                 projects = [
                     project
                     for project in self.request.user.projects
-                    if project.normalized_name
-                    in macaroon.caveats["permissions"]["projects"]
+                    if project.normalized_name in restrictions["projects"]
                 ]
                 for project in projects:
                     project.record_event(

@@ -431,6 +431,7 @@ class TestCreateMacaroonForm:
         )
 
         assert form.validate()
+        assert form.validated_restrictions == {}
 
     def test_validate_token_scope_valid_project(self):
         form = forms.CreateMacaroonForm(
@@ -441,6 +442,7 @@ class TestCreateMacaroonForm:
         )
 
         assert form.validate()
+        assert form.validated_restrictions == {"projects": ["foo"]}
 
 
 class TestDeleteMacaroonForm:

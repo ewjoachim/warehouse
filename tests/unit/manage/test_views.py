@@ -69,12 +69,15 @@ class TestManageAccount:
     def test_default_response(self, monkeypatch, public_email, expected_public_email):
         breach_service = pretend.stub()
         user_service = pretend.stub()
+        describe_caveats = pretend.stub()
+        macaroon_service = pretend.stub(describe_caveats=describe_caveats)
         name = pretend.stub()
         user_id = pretend.stub()
         request = pretend.stub(
             find_service=lambda iface, **kw: {
                 IPasswordBreachedService: breach_service,
                 IUserService: user_service,
+                IMacaroonService: macaroon_service,
             }[iface],
             user=pretend.stub(name=name, id=user_id, public_email=public_email),
         )
@@ -99,6 +102,7 @@ class TestManageAccount:
             "add_email_form": add_email_obj,
             "change_password_form": change_pass_obj,
             "active_projects": view.active_projects,
+            "describe_caveats": describe_caveats,
         }
         assert view.request == request
         assert view.user_service == user_service
@@ -1722,12 +1726,13 @@ class TestProvisionMacaroonViews:
         monkeypatch.setattr(
             views.ProvisionMacaroonViews, "project_names", project_names
         )
-
+        describe_caveats = pretend.stub()
+        macaroon_service = pretend.stub(describe_caveats=describe_caveats)
         request = pretend.stub(
             user=pretend.stub(id=pretend.stub(), username=pretend.stub()),
             find_service=lambda interface, **kw: {
-                IMacaroonService: pretend.stub(),
                 IUserService: pretend.stub(),
+                IMacaroonService: macaroon_service,
             }[interface],
         )
 
@@ -1737,6 +1742,7 @@ class TestProvisionMacaroonViews:
             "project_names": project_names,
             "create_macaroon_form": create_macaroon_obj,
             "delete_macaroon_form": delete_macaroon_obj,
+            "describe_caveats": describe_caveats,
         }
 
     def test_project_names(self, db_request):
@@ -1843,7 +1849,8 @@ class TestProvisionMacaroonViews:
         assert macaroon_service.create_macaroon.calls == []
 
     def test_create_macaroon(self, monkeypatch):
-        macaroon = pretend.stub()
+        caveats = {"foo": "bar"}
+        macaroon = pretend.stub(caveats=caveats)
         macaroon_service = pretend.stub(
             create_macaroon=pretend.call_recorder(
                 lambda *a, **kw: ("not a real raw macaroon", macaroon)
@@ -1866,7 +1873,7 @@ class TestProvisionMacaroonViews:
         create_macaroon_obj = pretend.stub(
             validate=lambda: True,
             description=pretend.stub(data=pretend.stub()),
-            validated_scope="foobar",
+            validated_restrictions={},
         )
         create_macaroon_cls = pretend.call_recorder(
             lambda *a, **kw: create_macaroon_obj
@@ -1888,13 +1895,10 @@ class TestProvisionMacaroonViews:
 
         assert macaroon_service.create_macaroon.calls == [
             pretend.call(
-                location=request.domain,
+                domain=request.domain,
                 user_id=request.user.id,
                 description=create_macaroon_obj.description.data,
-                caveats={
-                    "permissions": create_macaroon_obj.validated_scope,
-                    "version": 1,
-                },
+                restrictions={},
             )
         ]
         assert result == {
@@ -1910,16 +1914,14 @@ class TestProvisionMacaroonViews:
                 ip_address=request.remote_addr,
                 additional={
                     "description": create_macaroon_obj.description.data,
-                    "caveats": {
-                        "permissions": create_macaroon_obj.validated_scope,
-                        "version": 1,
-                    },
+                    "caveats": {"foo": "bar"},
                 },
             )
         ]
 
     def test_create_macaroon_records_events_for_each_project(self, monkeypatch):
-        macaroon = pretend.stub()
+        caveats = pretend.stub()
+        macaroon = pretend.stub(caveats=caveats)
         macaroon_service = pretend.stub(
             create_macaroon=pretend.call_recorder(
                 lambda *a, **kw: ("not a real raw macaroon", macaroon)
@@ -1949,7 +1951,7 @@ class TestProvisionMacaroonViews:
         create_macaroon_obj = pretend.stub(
             validate=lambda: True,
             description=pretend.stub(data=pretend.stub()),
-            validated_scope={"projects": ["foo", "bar"]},
+            validated_restrictions={"projects": ["foo", "bar"]},
         )
         create_macaroon_cls = pretend.call_recorder(
             lambda *a, **kw: create_macaroon_obj
@@ -1971,12 +1973,11 @@ class TestProvisionMacaroonViews:
 
         assert macaroon_service.create_macaroon.calls == [
             pretend.call(
-                location=request.domain,
+                domain=request.domain,
                 user_id=request.user.id,
                 description=create_macaroon_obj.description.data,
-                caveats={
-                    "permissions": create_macaroon_obj.validated_scope,
-                    "version": 1,
+                restrictions={
+                    "projects": ["foo", "bar"],
                 },
             )
         ]
@@ -1993,10 +1994,7 @@ class TestProvisionMacaroonViews:
                 ip_address=request.remote_addr,
                 additional={
                     "description": create_macaroon_obj.description.data,
-                    "caveats": {
-                        "permissions": create_macaroon_obj.validated_scope,
-                        "version": 1,
-                    },
+                    "caveats": caveats,
                 },
             ),
             pretend.call(
@@ -2083,12 +2081,11 @@ class TestProvisionMacaroonViews:
         assert macaroon_service.delete_macaroon.calls == []
 
     def test_delete_macaroon(self, monkeypatch):
-        macaroon = pretend.stub(
-            description="fake macaroon", caveats={"version": 1, "permissions": "user"}
-        )
+        macaroon = pretend.stub(description="fake macaroon", caveats=pretend.stub())
         macaroon_service = pretend.stub(
             delete_macaroon=pretend.call_recorder(lambda id: pretend.stub()),
             find_macaroon=pretend.call_recorder(lambda id: macaroon),
+            describe_caveats=pretend.call_recorder(lambda mac: {}),
         )
         record_event = pretend.call_recorder(
             pretend.call_recorder(lambda *a, **kw: None)
@@ -2128,6 +2125,9 @@ class TestProvisionMacaroonViews:
         assert macaroon_service.find_macaroon.calls == [
             pretend.call(delete_macaroon_obj.macaroon_id.data)
         ]
+        assert macaroon_service.describe_caveats.calls == [
+            pretend.call(macaroon.caveats)
+        ]
         assert request.session.flash.calls == [
             pretend.call("Deleted API token 'fake macaroon'.", queue="success")
         ]
@@ -2143,11 +2143,14 @@ class TestProvisionMacaroonViews:
     def test_delete_macaroon_records_events_for_each_project(self, monkeypatch):
         macaroon = pretend.stub(
             description="fake macaroon",
-            caveats={"version": 1, "permissions": {"projects": ["foo", "bar"]}},
+            caveats=pretend.stub(),
         )
         macaroon_service = pretend.stub(
             delete_macaroon=pretend.call_recorder(lambda id: pretend.stub()),
             find_macaroon=pretend.call_recorder(lambda id: macaroon),
+            describe_caveats=pretend.call_recorder(
+                lambda mac: {"projects": ["foo", "bar"]}
+            ),
         )
         record_event = pretend.call_recorder(
             pretend.call_recorder(lambda *a, **kw: None)
@@ -2193,6 +2196,9 @@ class TestProvisionMacaroonViews:
         ]
         assert macaroon_service.find_macaroon.calls == [
             pretend.call(delete_macaroon_obj.macaroon_id.data)
+        ]
+        assert macaroon_service.describe_caveats.calls == [
+            pretend.call(macaroon.caveats)
         ]
         assert request.session.flash.calls == [
             pretend.call("Deleted API token 'fake macaroon'.", queue="success")
